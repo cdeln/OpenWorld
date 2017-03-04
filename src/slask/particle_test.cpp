@@ -1,0 +1,345 @@
+// Lab 4, terrain generation
+#ifdef __APPLE__
+#include <OpenGL/gl3.h>
+// Linking hint for Lightweight IDE
+// uses framework Cocoa
+#endif
+#include "MicroGlut.h"
+#include "GL_utilities.h"
+#include "LoadTGA.h"
+#include "camera.hpp"
+#include "autogen.hpp"
+#include "tex.hpp"
+#include "mesh.hpp"
+#include "util.hpp"
+#include <cmath>
+#include <iostream>
+#include <opencv2/core/core.hpp>
+#include <opencv2/highgui/highgui.hpp>
+
+
+bool quit_application = false;
+std::vector<GLfloat> height_map;
+cd::Mesh terrain_mesh;
+GLuint map_size;
+GLfloat map_height;
+
+cd::GLMCamera camera;
+
+// References to shader programs
+GLuint shader;
+GLuint particle_shader;
+
+std::vector<glm::vec3> particles;
+const GLuint num_particle_buffers = 3;
+GLuint buffer_cnt;
+GLuint particle_vao[num_particle_buffers];
+GLuint particle_vbo[num_particle_buffers];
+
+int window_width = 600;
+int window_height = 600;
+
+float mouseX, mouseY;
+float moveZ, moveX;
+void updateKey(unsigned char event, int up)
+{ 
+    switch(event)
+    {
+        case 'w': moveZ = up ? 0 : -1; break;
+        case 'a': moveX = up ? 0 : -1; break; 
+        case 's': moveZ = up ? 0 : 1; break;
+        case 'd': moveX = up ? 0 : 1; break; 
+        case 'f': glutToggleFullScreen(); break;
+        case 'q': quit_application = true; break;
+    }
+}
+void keyboardCallback(unsigned char event, int x, int y)
+{
+    updateKey(event, 0);
+}
+void keyboardCallbackRelease(unsigned char event, int x, int y)
+{
+    updateKey(event, 1);
+}
+
+void mouseCallback(int mx, int my) {
+    int w,h;
+    glutGetWindowSize(&w, &h);
+    mx -= w/2;
+    my -= h/2;
+    float wf = ((float)w) / 2.0f;
+    float hf = ((float)h) / 2.0f;
+    mouseX += ((float)mx) / wf; 
+    mouseY += ((float)my) / hf; 
+    if( (mx != 0) || (my != 0) )
+        glutWarpPointer(wf,hf);
+}
+
+void getTriangle(float posX, float posZ, int gridWidth, int * index0, int * index1, int * index2)
+{
+    int indX0 = static_cast<int>(std::round(posX)); //(int)(posX + 0.5f);
+    int indZ0 = static_cast<int>(std::round(posZ)); //(int)(posZ + 0.5f);
+    int diffX = indX0 < posX ? 1 : -1;
+    int diffZ = indZ0 < posZ ? 1 : -1;
+
+    *index0 = indX0 + indZ0 * gridWidth;
+    *index1 = (indX0+diffX) + indZ0 * gridWidth;
+    *index2 = indX0 + (indZ0+diffZ) * gridWidth;
+}
+
+float calcDist(glm::vec3 a, glm::vec3 b)
+{
+    float x = a.x - b.x;
+    float y = a.y - b.y;
+    float z = a.z - b.z;
+    return sqrt( x*x + y*y + z*z);
+}
+
+// Compute barycentric coordinates (u, v, w) for
+// point p with respect to triangle (a, b, c)
+// http://gamedev.stackexchange.com/questions/23743/whats-the-most-efficient-way-to-find-barycentric-coordinates
+void barycentric(glm::vec3 p, glm::vec3 a, glm::vec3 b, glm::vec3 c, float * u, float * v, float * w)
+{
+    glm::vec3 v0 = b-a;
+    glm::vec3 v1 = c-a;
+    glm::vec3 v2 = p-a;
+    float d00 = glm::dot(v0,v0);
+    float d01 = glm::dot(v0,v1);
+    float d11 = glm::dot(v1,v1);
+    float d20 = glm::dot(v2, v0);
+    float d21 = glm::dot(v2, v1);
+    float denom = d00 * d11 - d01 * d01;
+    *v = (d11 * d20 - d01 * d21) / denom;
+    *w = (d00 * d21 - d01 * d20) / denom;
+    *u = 1.0f - *v - *w;
+}
+
+float getHeight(GLfloat * vertexArray, GLfloat * height_map, int size, float posX, float posZ)
+{
+    int index0, index1, index2;
+    getTriangle(posX, posZ, size, &index0, &index1, &index2);
+
+    float vx1 = vertexArray[index0*3 + 0];
+    float vx2 = vertexArray[index1*3 + 0];
+    float vx3 = vertexArray[index2*3 + 0];
+    float vy1 = vertexArray[index0*3 + 1];
+    float vy2 = vertexArray[index1*3 + 1];
+    float vy3 = vertexArray[index2*3 + 1];
+    float vz1 = vertexArray[index0*3 + 2];
+    float vz2 = vertexArray[index1*3 + 2];
+    float vz3 = vertexArray[index2*3 + 2];
+
+    glm::vec3 v0(posX, 0, posZ);
+    glm::vec3 v1(vx1, 0, vz1);
+    glm::vec3 v2(vx2, 0, vz2);
+    glm::vec3 v3(vx3, 0, vz3);
+
+    float u,v,w;
+    barycentric(v0,v1,v2,v3,&u,&v,&w);
+    float y = u * vy1 + v * vy2 + w * vy3;
+    return y;
+}
+
+void init(void)
+{
+    // GL inits
+    glClearColor(0,0,0,0);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glDepthFunc(GL_LESS);
+    glBlendFunc (GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    printError("GL inits");
+
+    // Load and compile shader s
+    shader = loadShaders("shaders/simple.vert","shaders/simple.frag");
+    particle_shader = loadShadersG(
+            "shaders/particle.vert",
+            "shaders/particle.frag",
+            "shaders/particle.geom");
+
+    // Load terrain data
+    map_size = 128;
+    map_height = static_cast<GLfloat>(map_size)/8;
+    std::cout << "Generate height_map" << std::endl;
+    height_map = cd::generateTexture2D(map_size, map_size, -map_height, map_height);
+    std::cout << "Generate terrain_mesh" << std::endl;
+    terrain_mesh = cd::generateTerrain(&height_map[0], map_size, map_size, 0.1f);
+    terrain_mesh.toGPU();
+    terrain_mesh.bindShader(
+            shader,
+            "inPosition",
+            "", "", "", "");
+    printError("terrain bindShader");
+
+    // Transform feedback
+    /*
+    GLuint transform_vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+    char * source = readFile("shaders/snow_transform.vert");
+    glCreateShaderSource(transform_vertex_shader, 1, &source, NULL);
+    glCompileShader(transform_vertex_shader);
+    printError("glCompileShader");
+
+    transform_program = glCreateProgram();
+    glAttachShader(transform_program, transform_vertex_shader);
+    const char * varyings[] = {"outpos, outvel"};
+    glLinkProgram(transform_program);
+    printError("glLinkProgram");
+    */
+
+    float dt = 1.0f / 60.0f;
+    glm::vec3 g(0.0f,-9.82f,0.0f);
+    particles.resize(10*1024);
+
+    for(GLuint i = 0; i < particles.size(); ++i)
+    {
+        particles[i] = glm::vec3(
+                map_size * float(std::rand())/RAND_MAX,
+                map_height + (map_height)*(0.5f - float(std::rand())/RAND_MAX),
+                map_size * float(std::rand())/RAND_MAX);
+    }
+
+    buffer_cnt = 0;
+    glGenVertexArrays(num_particle_buffers, particle_vao);
+    glGenBuffers(num_particle_buffers, particle_vbo); 
+    for(GLuint i = 0; i < num_particle_buffers; ++i)
+    {
+        std::cout << "vao[" <<i<<"] = " << particle_vao[i] << std::endl;
+        glBindVertexArray(particle_vao[i]);
+        glBindBuffer(GL_ARRAY_BUFFER, particle_vbo[i]);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3)*particles.size(), &particles[0], GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(GLfloat), nullptr);
+    }
+    printError("data to particle buffers");
+
+    camera.lookTowards(
+            glm::vec3(map_size/2,map_size/2,map_size/2),
+            glm::vec3(1,-1,0));
+    camera.bindShader(shader, "projMatrix", "mdlMatrix");
+    printError("init camera shader");
+    camera.bindShader(particle_shader, "projMatrix", "mdlMatrix");
+    printError("init camera particle");
+}
+
+void updateCamera() {
+
+    float rot_vel = 1.0;
+    camera.rotateLocal(rot_vel * mouseY, rot_vel * mouseX);
+    camera.translateLocal(moveX, 0, moveZ);      
+    mouseX = 0;
+    mouseY = 0;
+}
+
+void updateParticles()
+{
+
+    for(GLuint i = 0; i < particles.size(); ++i)
+    {
+        float x = particles[i].x;
+        float y = particles[i].y;
+        float z = particles[i].z;
+        float height  = getHeight(
+                (GLfloat*)&terrain_mesh.m_vertex_array[0],
+                &height_map[0],
+                map_size,
+                x,z);
+
+        if( y <= height + 1) 
+        {
+            particles[i].y = map_height + (map_height)*(0.5f - float(std::rand())/RAND_MAX);
+        }
+        particles[i].y -= 0.1;
+    };
+
+    buffer_cnt = (buffer_cnt+1) % num_particle_buffers;
+    glBindBuffer(GL_ARRAY_BUFFER, particle_vbo[buffer_cnt]);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(glm::vec3)*particles.size(), 0, GL_DYNAMIC_DRAW);
+
+    glm::vec3 * mapped_array = 
+        reinterpret_cast<glm::vec3*>(
+                glMapBufferRange(GL_ARRAY_BUFFER, 0, 
+                    sizeof(glm::vec3)*particles.size(),
+                    GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT
+                    )
+                );
+    std::copy(particles.begin(), particles.end(), mapped_array);
+    glUnmapBuffer(GL_ARRAY_BUFFER);
+}
+
+void display(void)
+{
+    printError("pre display");
+
+    updateCamera();
+    printError("updateCamera");
+
+    updateParticles();
+    printError("updateParticles");
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+
+    // Draw terrain
+    glEnable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    terrain_mesh.bindShader(
+            shader, 
+            "inPosition",
+            "inNormal",
+            "",
+            "",
+            "");
+    camera.bindShader(
+            shader,
+            "projMatrix",
+            "mdlMatrix");
+
+    terrain_mesh.draw();
+    printError("display terrain");
+
+    // Draw particles
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+    glUseProgram(particle_shader);
+    camera.bindShader(particle_shader, "projMatrix", "mdlMatrix");
+    glBindVertexArray(particle_vao[buffer_cnt]);
+    glDrawArrays(GL_POINTS, 0, particles.size());
+    printError("draw particles");
+
+
+    glutSwapBuffers();
+
+    if( quit_application )
+        exit(0);
+}
+
+void timer(int i)
+{
+    glutTimerFunc(20, &timer, i);
+    glutPostRedisplay();
+}
+
+int main(int argc, char **argv)
+{
+    glutInit(&argc, argv);
+    glutInitDisplayMode(GLUT_DOUBLE | GLUT_DEPTH);
+    glutInitContextVersion(3, 2);
+    glutInitWindowSize (window_width, window_height);
+    glutCreateWindow ("TSBK07 Lab 4");
+    glutDisplayFunc(display);
+    init ();
+    glutTimerFunc(20, &timer, 0);
+
+    glutKeyboardFunc(keyboardCallback);
+    glutKeyboardUpFunc(keyboardCallbackRelease);
+    glutPassiveMotionFunc(mouseCallback);
+
+    glutMainLoop();
+    exit(0);
+}

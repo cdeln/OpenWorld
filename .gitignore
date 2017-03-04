@@ -1,0 +1,8 @@
+*.obj
+*.exe
+*.swp
+*.c~
+*.h~
+build
+old
+run
