@@ -1,15 +1,15 @@
 # OpenWorld: A graphics project
 This is a graphics project for the course [Computer Graphics](https://www.computer-graphics.se/TSBK07.html)
-held by [Ingemar Ragnemalm](https://www.lysator.liu.se/~ingemar/) at Linöping University, Sweden during 2019. 
+held by [Ingemar Ragnemalm](https://www.lysator.liu.se/~ingemar/) at Linköping University, Sweden during 2017.
 The project aimed at generating *open worlds*, which was not completely successful,
 but many basic and intermediate graphics features were implemented.
-Read the [paper](doc/ComputerGraphicsProjectReport.pdf) for an elaborate report of the project. 
+Read the [paper](doc/ComputerGraphicsProjectReport.pdf) for an elaborate report of the project.
 OpenGL context is provided by [MicroGlut](http://ragnemalm.se/lightweight/aboutmicroglut.html).
 
 ## Dependencies
 * OpenGL (version >= 4.2)
 * OpenCV (2 or 3)
-* curl 
+* curl
 * glm (if not installed on system it is available as a submodule)
 * fftw3 (downloaded in make, or can be installed on system)
 
@@ -28,7 +28,7 @@ OpenGL context is provided by [MicroGlut](http://ragnemalm.se/lightweight/aboutm
 * Common library functions are located under src/lib
 * GLUT is located under common (Ingemar Ragnemalm version)
 * Other external dependencies are located under ext
-* Shaders are located in shaders 
+* Shaders are located in shaders
 * Deprecated test shaders are located in shaders/slask and shaders/unsupported
 * Scripts are located under scripts
 * Documentation is located under doc
